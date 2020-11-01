@@ -14,6 +14,9 @@ import tkinter as tk
 from threading import Event
 from datetime import datetime, timedelta
 import command_line_user_interface as TeaBiscuits
+from importlib import reload
+import stats
+
 
 
 class App(tk.Tk):
@@ -22,8 +25,11 @@ class App(tk.Tk):
     take_screenshots = False
     def __init__(self, title):
         tk.Tk.__init__(self)
+        self.text_color = 'limegreen'
+        self.text_bg = 'black'
+        self.label_bg = 'dark orange'
         self.data = []
-        self.data_frame = tk.Frame(self, bg="#dfdfdf")
+        self.data_frame = tk.Frame(self, bg="black")#"#dfdfdf")
         self.Line1 = None
         self.stop_event = Event()
         self.results_q = None
@@ -31,15 +37,17 @@ class App(tk.Tk):
         self.minsize(200, 200) 
 
         self.wm_geometry("1024x480")
-        self.canvas = tk.Canvas(self.data_frame, background="white")
+        self.canvas = tk.Canvas(self.data_frame, background="black")
         self.canvas.bind("<Configure>", self.on_resize)
-        self.canvas.create_line((0, 0, 0, 0), tag='X', fill='darkblue', width=1)
-        self.canvas.create_line((0, 0, 0, 0), tag='Y', fill='darkred', width=1)
-        self.canvas.create_line((0, 0, 0, 0), tag='Z', fill='darkgreen', width=1)
+        self.canvas.bind("<Button-1>", self.onclick_canvas_left)
+
+        self.canvas.create_line((0, 0, 0, 0), tag='X', fill='limegreen', width=1)
+        # self.canvas.create_line((0, 0, 0, 0), tag='Y', fill='darkred', width=1)
+        # self.canvas.create_line((0, 0, 0, 0), tag='Z', fill='darkgreen', width=1)
         self.canvas.pack(side="top", expand=True, fill='both')
 
         self.data_frame.pack(side="top", fill="both", expand=True)
-        self.config_frame = tk.Frame(self, bg="#dfdfdf")
+        self.config_frame = tk.Frame(self, bg="black")#bg="#dfdfdf")
         
 
         #self.grid_rowconfigure(0, weight=1)
@@ -49,49 +57,49 @@ class App(tk.Tk):
             if col_i in [0, 4,6]:
                 continue
             self.config_frame.grid_columnconfigure(col_i, weight=1)
-        self.start_b = tk.Button(self.config_frame, text="start stream", width=10, command=self.start_stream)
+        self.start_b = tk.Button(self.config_frame, text="start stream", width=10, command=self.start_stream, bg='limegreen')
         self.start_b.grid(row=1,column=0)
-        self.stop_b = tk.Button(self.config_frame, text="stop stream", width=10, command=self.stop_stream)
+        self.stop_b = tk.Button(self.config_frame, text="stop stream", width=10, command=self.stop_stream, bg='firebrick1')
         self.stop_b.grid(row=2,column=0)
         self.stop_b['state'] = tk.DISABLED
         #self.np = tk.StringVar(); self.np.set(self.np_default.format("None Yet"))
         #self.integral = tk.StringVar(); self.integral.set(self.integral_default.format("None Yet"))
-        #tk.Label(self, textvariable=self.np).grid(row=2, column=1, sticky="w")
-        #tk.Label(self, textvariable=self.integral).grid(row=2, column=3, sticky="w")
+        #tk.Label(self, textvariable=self.np).grid(row=2, column=1, sticky="w", fg=self.text_color, bg=self.text_bg)
+        #tk.Label(self, textvariable=self.integral).grid(row=2, column=3, sticky="w", fg=self.text_color, bg=self.text_bg)
 
-        tk.Label(self.config_frame, text="Sample Rate (kHz)").grid(row=1, column=1, sticky='w')
-        self.sample_rate = tk.Entry(self.config_frame)
+        tk.Label(self.config_frame, text="Sample Rate (kHz)", fg=self.text_color, bg=self.text_bg).grid(row=1, column=1, sticky='w')
+        self.sample_rate = tk.Entry(self.config_frame, bg=self.label_bg)
         self.sample_rate.grid(row=2, column=1,sticky="w")
-        self.sample_rate.insert(0, '100')
+        self.sample_rate.insert(0, '166')
 
     
-        tk.Label(self.config_frame, text="# Samples on Screen").grid(row=1, column=2, sticky='w')
-        self.buflen = tk.Entry(self.config_frame)
+        tk.Label(self.config_frame, text="# Samples on Screen", fg=self.text_color, bg=self.text_bg).grid(row=1, column=2, sticky='w')
+        self.buflen = tk.Entry(self.config_frame, bg=self.label_bg)
         self.buflen.grid(row=2, column=2,sticky="w")
-        self.buflen.insert(0, '512')
+        self.buflen.insert(0, '128')
         self.buflen.bind("<Return>", self.update_buflen)
         self.buflen.bind("<FocusOut>", self.update_buflen)
         self.update_buflen(skip_redraw=True)
 
-        tk.Label(self.config_frame, text="Bias Voltage (mV)").grid(row=1, column=3, sticky='w')
-        self.voltage_clamp_val = tk.Entry(self.config_frame)
+        tk.Label(self.config_frame, text="Bias Voltage (mV)", fg=self.text_color, bg=self.text_bg).grid(row=1, column=3, sticky='w')
+        self.voltage_clamp_val = tk.Entry(self.config_frame, bg=self.label_bg)
         self.voltage_clamp_val.grid(row=2, column=3, sticky='w')
         self.voltage_clamp_val.insert(0,'100')
 
         self.use_fake_data = tk.IntVar()
-        self.use_fake_data_checkbox = tk.Checkbutton(self.config_frame, text="Use Fake Data", variable=self.use_fake_data)
+        # self.use_fake_data_checkbox = tk.Checkbutton(self.config_frame, text="Use Fake Data", variable=self.use_fake_data, bg=self.text_bg)
         # self.use_fake_data_checkbox.grid(row=1, column=4)
 
         self.use_raw_protocol = tk.IntVar()
         self.use_raw_protocol.set(0)
-        self.use_raw_protocol_checkbox = tk.Checkbutton(self.config_frame, text="Use Raw Protocol", variable=self.use_raw_protocol)
+        self.use_raw_protocol_checkbox = tk.Checkbutton(self.config_frame, text="Use Raw Protocol", variable=self.use_raw_protocol, bg=self.text_bg, fg=self.text_color)
         self.use_raw_protocol_checkbox.grid(row=1, column=4, sticky='w')
 
         self.save_to_disk = tk.IntVar()
-        self.save_to_disk_checkbox = tk.Checkbutton(self.config_frame, text="Save To Disk", variable=self.save_to_disk)
+        self.save_to_disk_checkbox = tk.Checkbutton(self.config_frame, text="Save To Disk", variable=self.save_to_disk, bg=self.text_bg, fg=self.text_color)
         self.save_to_disk_checkbox.grid(row=2, column=4, sticky='w')
 
-        self.save_filename = tk.Entry(self.config_frame, bg='white', fg='grey')
+        self.save_filename = tk.Entry(self.config_frame, fg='grey', bg=self.label_bg)
         self.save_filename.grid(row=2, column=5, sticky='we')
         self.save_filename_default_text = "leave empty for autogenerated timestamped file"
         self.save_filename.insert(0, self.save_filename_default_text)
@@ -99,29 +107,29 @@ class App(tk.Tk):
         self.save_filename.bind("<FocusOut>", self.handle_focus_out)
         # self.save_filename.bind("<Return>", handle_enter)
 
-        tk.Label(self.config_frame, text="IP address").grid(row=1, column=6, sticky='e')
-        self.host_ip = tk.Entry(self.config_frame)
+        tk.Label(self.config_frame, text="IP address", fg=self.text_color, bg=self.text_bg).grid(row=1, column=6, sticky='e')
+        self.host_ip = tk.Entry(self.config_frame, bg=self.label_bg)
         self.host_ip.insert(0, 'demonpore.local')
         self.host_ip.grid(row=1, column=7, sticky='w')
-        tk.Label(self.config_frame, text="IP port").grid(row=2, column=6, sticky='e')
-        self.host_port = tk.Entry(self.config_frame)
+        tk.Label(self.config_frame, text="IP port", fg=self.text_color, bg=self.text_bg).grid(row=2, column=6, sticky='e')
+        self.host_port = tk.Entry(self.config_frame, bg=self.label_bg)
         self.host_port.insert(0, '31416')
         self.host_port.grid(row=2, column=7, sticky='w')
         
 
-        tk.Label(self.config_frame, text="Vertical Scaling\n(1.0 is 100%)").grid(row=1, column=8, sticky='w')
-        # self.vertical_scaling = tk.Entry(self.config_frame)
+        tk.Label(self.config_frame, text="Vertical Scaling\n(1.0 is 100%)", fg=self.text_color, bg=self.text_bg).grid(row=1, column=8, sticky='w')
+        # self.vertical_scaling = tk.Entry(self.config_frame, bg=self.label_bg)
         self.vertical_scaling = tk.Spinbox(self.config_frame, from_=0, to=100, increment=0.01,
-                                           command=self.replot_labels)
+                                           command=self.replot_labels, bg=self.label_bg)
         self.vertical_scaling.delete(0,"end")
         self.vertical_scaling.insert(0,1)
         self.vertical_scaling.grid(row=2, column=8,sticky="w")
         self.vertical_scaling.bind("<KeyRelease>", self.replot_labels)
         # self.vertical_scaling.insert(0,'512')
 
-        tk.Label(self.config_frame, text="Vertical Offset").grid(row=1, column=9, sticky='w')
+        tk.Label(self.config_frame, text="Vertical Offset", fg=self.text_color, bg=self.text_bg).grid(row=1, column=9, sticky='w')
         self.vertical_offset = tk.Spinbox(self.config_frame, from_=-32768, to=32768, increment=1,
-                                          command=self.replot_labels)
+                                          command=self.replot_labels, bg=self.label_bg)
         self.vertical_offset.delete(0,"end")
         self.vertical_offset.insert(0,0)
         self.vertical_offset.grid(row=2, column=9,sticky="w")
@@ -132,11 +140,54 @@ class App(tk.Tk):
         self.show_labels.set(1)
         self.show_labels.checkbox = tk.Checkbutton(self.config_frame, text="Show labels",
                                                    variable=self.show_labels,
-                                                   command=self.show_hide_labels)
+                                                   command=self.show_hide_labels,
+                                                   bg=self.text_bg, fg=self.text_color)
         self.show_labels.checkbox.grid(row=1, column=10)
 
-        self.config_frame.pack(side="top", fill="x")#, expand=True)
+        self.points_counter = tk.IntVar()
+        tk.Label(self.config_frame, text="Points: ", fg=self.text_color, bg=self.text_bg).grid(row=1, column=11, sticky='w')
+        tk.Label(self.config_frame, textvariable=self.points_counter, fg=self.text_color, bg=self.text_bg).grid(row=2, column=11, sticky='w')
 
+        self.config_frame.pack(side="top", fill="x")#, expand=True)
+        self.click_text_list = ['STORE', 'CACHE', 'NAB', 'GRAB', 'TAG', 'ID', 'IDENTIFY', 'INTEREST', 'INTERESTING',
+            'SAVE', 'REMEMBER', 'FAV', 'FAVORITE', 'BOOKMARK']
+        self.click_text_list_count = 0
+        self.click_text_list_len = len(self.click_text_list)
+
+    def onclick_canvas_left(self, event=None, point=False):
+        if event:
+            #, anchor=tk.N
+            if point:
+                # x1, y1 = (event.x - 1), (event.y - 1)
+                # x2, y2 = (event.x + 1), (event.y + 1)
+                # self.canvas.create_oval(x1, y1, x2, y2, fill="dark orange", tags='clicks')#476042")
+                x0 = event.x - 10
+                x1 = event.x
+                x2 = event.x + 10
+                y0 = event.y
+                y1 = y0 - 10
+                y2 = y0 - 50
+                line = self.canvas.create_line(x0, y1, x1, y0, tags='stats', fill="dark orange")
+                line = self.canvas.create_line(x1, y0, x2, y1, tags='stats', fill="dark orange")
+                line = self.canvas.create_line(x1, y0, x1, y2, tags='stats', fill="dark orange")
+                # self.after(100, self.clear_canvas_stats)
+            else:
+                print("clicked at", event.x, event.y)
+                t = self.click_text_list[self.click_text_list_count]
+                self.click_text_list_count = (self.click_text_list_count+1)%(self.click_text_list_len)
+                self.canvas.create_text(event.x, event.y, text=t, tags='clicks', fill='firebrick1',
+                                        font=("Scifi Adventure", 22))
+                self.after(200, self.clear_canvas_clicks)
+
+    def clear_canvas_clicks(self):
+        if self.stop_event.is_set():
+            return
+        self.canvas.delete("clicks")
+
+    def clear_canvas_stats(self):
+        if self.stop_event.is_set():
+            return
+        self.canvas.delete("stats")
 
     def handle_focus_in(self, _):
         self.save_filename.delete(0, tk.END)
@@ -160,6 +211,8 @@ class App(tk.Tk):
     #     return self.
 
     def start_stream(self):
+        reload(stats)
+        self.points_counter.set(0)
         self.stop_b['state'] = tk.NORMAL
         self.start_b['state'] = tk.DISABLED
         # self.stop_stream()
@@ -225,7 +278,9 @@ class App(tk.Tk):
                 #print('got val')
             # print('got frame')
             self.data = data
+            self.clear_canvas_stats()
             self.replot()
+            self.statistics()
             self.after(100, self.start_plotting)
     
     def replot(self):
@@ -246,12 +301,27 @@ class App(tk.Tk):
             #print(value, y, h_scaling, h)
             coordsX.append(y)
         self.canvas.coords('X', *coordsX)
-        
+
+    def statistics(self):
+        h, w, h_scaling, vertical_offset = self.get_scaling()
+        peaks = stats.get_peaks(self.data)
+        self.points_counter.set(self.points_counter.get()+len(peaks))
+        print('**** Peaks - {}'.format(peaks))
+        for p in peaks:
+            x = int((w / self.npoints) * p)
+            y = self.data[p]
+            y = (int((y+vertical_offset) * h_scaling) + h//2)
+            p = stats.Point(x,y)
+
+            self.onclick_canvas_left(p, point=True)
+            
+
     def on_resize(self, event=None):
         self.replot_labels()
         self.replot()
 
     def replot_labels(self, event=None):
+        color = 'limegreen'
         if self.show_labels.get():
             h, w, h_scaling, vert_off = self.get_scaling()
             # min_y = (int(-32768 * h_scaling) + h//2) - vert_off
@@ -262,8 +332,8 @@ class App(tk.Tk):
             num_actual_ticks = num_actual_ticks if num_actual_ticks>1 else 2
             for n in range(0, self.npoints, num_actual_ticks):
                 x = int((w / self.npoints) * n)
-                self.canvas.create_line(x,0,x,5, width=2, tag='ticks')
-                self.canvas.create_text(x,0, text='%d'% (n), anchor=tk.N, tag='ticks')
+                self.canvas.create_line(x,0,x,5, width=2, tag='ticks', fill=color)
+                self.canvas.create_text(x,0, text='%d'% (n), anchor=tk.N, tag='ticks', fill=color)
 
             print(vert_off)
             vert_tick_dist = h//10
@@ -285,7 +355,7 @@ class App(tk.Tk):
                 scaled_y_text = f' {scaled_y_text}'
                 self.canvas.create_text(0, scaled_y,
                                         text=scaled_y_text,
-                                        anchor=tk.W, tag='ticks')
+                                        anchor=tk.W, tag='ticks', fill=color)
 
     def show_hide_labels(self, event=None):
         self.canvas.delete("ticks")
@@ -314,7 +384,7 @@ def main(args = None):
         args = sys.argv
 
     if len(args) == 1:
-        app = App("Demonpore!")
+        app = App("2021 a SARS Odyssey!")
         app.mainloop()
         return 0
     else:
