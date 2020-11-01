@@ -28,6 +28,7 @@ from tkinter import ttk
 from tkinter import filedialog
 from tkinter.messagebox import showinfo
 import os
+import argparse
 
 
 
@@ -499,14 +500,23 @@ def main(args = None):
     if args is None:
         args = sys.argv
 
-    if len(args) == 1:
-        root = tk.Tk()
-        app = App(root, "Demonpore CSV DataViewer!")
-        root.mainloop()
-        return 0
-    else:
-        print('usage: data_viewer.py')
-        return -1
+    parser = argparse.ArgumentParser(description='Display poredata')
+    parser.add_argument('--csv', dest='csv', action='store',
+                    help='CSV filename to read')
+    parser.add_argument('--bin', dest='bin', action='store',
+                    help='Binary filename to read')
+
+    args = parser.parse_args()
+    values=vars(args)
+
+
+    root = tk.Tk()
+    app = App(root, "Demonpore CSV DataViewer!")
+    if "csv" in values:
+        app.filename=values["csv"]
+        app.delimeter = ","
+        app.load_file();
+    root.mainloop()
 
 
 if __name__ == '__main__':
