@@ -1,10 +1,14 @@
 #!/usr/bin/python3
 
-""" A GUI to open and view CSV files with format:
+"""
+A GUI to open and view CSV files with format:
 sample_num, sample_value
 
 it doesn't open the entire file,
 so should easily be able to handle files that are even gigabytes
+
+TODO add instructions on LEFT/RIGHT keyboard buttons, CTRL-LEFT/CTRL-RIGHT
+sample-num mismatch warning
 """
 
 
@@ -29,6 +33,7 @@ from tkinter import filedialog
 from tkinter.messagebox import showinfo
 import os
 import argparse
+import struct
 
 
 
@@ -70,8 +75,10 @@ class App(tk.Frame):
             if col_i in [0, 4,6]:
                 continue
             self.config_frame.grid_columnconfigure(col_i, weight=1)
-        self.start_b = tk.Button(self.config_frame, text="open file", width=10, command=self.open_csv_popup)
-        self.start_b.grid(row=1,column=0)
+        self.open_csv_btn = tk.Button(self.config_frame, text="open CSV file", width=10, command=self.open_csv_popup)
+        self.open_csv_btn.grid(row=1,column=0)
+        self.open_bin_btn = tk.Button(self.config_frame, text="open binary file", width=10, command=self.open_binary_popup)
+        self.open_bin_btn.grid(row=2,column=0)
 
         tk.Label(self.config_frame, text="Num points shown").grid(row=1, column=1, sticky='w')
         self.numpoints_shown = tk.Entry(self.config_frame)
@@ -121,6 +128,15 @@ class App(tk.Frame):
         root.bind('<Control-Key-Left>', self.page_left)
         root.bind('<Right>', self.scroll_right)
         root.bind('<Control-Key-Right>', self.page_right)
+        # 'Meta_L' (command in mac)
+        # 'Alt_L' (alt in mac)
+        # 'Control_L' (ctrl in mac)
+        # 'super_L' (fn in mac)
+        # 'Shift_L (shift in mac)
+        root.bind('<Control_L><Left>', self.page_left)
+        root.bind('<Meta_L><Left>', self.page_left)
+        root.bind('<Control_L><Right>', self.page_right)
+        root.bind('<Meta_L><Right>', self.page_right)
 
         self.filename = None
         self.delimeter = None
@@ -128,22 +144,47 @@ class App(tk.Frame):
         self.loaded_lines = []
         self.num_lines = None
         self.longest_line = '18446744073709551616,-32768\n'
-        self.longest_line_len = len(self.longest_line)
 
+        self.binary_filename = None
         #uncomment during testing to avoid the open CSV popup
-        # self.filename = 'output.csv'
+        # self.binary_filename = os.path.abspath('../demonporetv/bld_dev/data_last_night/'
+        #                             '04e9e50c00b6_1604142650.bin') #04e9e50c00b6_1604142650.bin
+        # self.filename = self.binary_filename
+        # self.open_bin()
+        # self.filename = '../electronics/Demonseeds/teensy4.1_controller/first_wet_100kHz'
         # self.delimeter = ','
-        # self.load_file()
-
+        # self.open_csv()
     
+    def open_binary_popup(self):
+        filename = filedialog.askopenfilename(initialdir=os.getcwd(), title="Select file")#, filetypes=(("all files","*.*")))
+        print('DEBUG opening as binary: ', filename)
+        if not filename:
+            return
+        self.binary_filename = filename
+        self.filename = filename
+        self.open_bin()
 
+    def open_bin(self):
+        self.read_npoints_lines = self.read_npoints_lines_bin
+        self.longest_line_len = 2
+        self.loaded_lines = []
+        self.load_file()
 
     def open_csv_popup(self):
         c = CSV_Opener(self)
         self.wait_window(c.win)
         print('DEBUG:', c.delimeter_sv.get(), c.filename)
+        if not c.filename:
+            return
+        self.binary_filename = None
         self.filename = c.filename
         self.delimeter = c.delimeter_sv.get()
+        self.open_csv()
+
+    def open_csv(self):
+        self.read_npoints_lines = self.read_npoints_lines_csv
+        self.longest_line_len = len(self.longest_line)
+        self.loaded_lines = []
         self.load_file()
 
     def load_file(self):
@@ -154,30 +195,45 @@ class App(tk.Frame):
             return sum( buf.count(b'\n') for buf in bufgen )
 
         self.file_num_bytes = os.stat(self.filename).st_size
-        self.num_lines = rawincount(self.filename)
+        if self.binary_filename:
+            self.num_lines = self.file_num_bytes / 2
+        else:
+            self.num_lines = rawincount(self.filename)
         start_scroll = 0.0
+        if self.num_lines == 0:
+            print('WARNING: empty file, nothing to read!')
+            return
         # self.scroll_window_percentage = self.npoints/self.num_lines
         end_scroll = self.scroll_window_percentage
         if end_scroll>1.0:
             end_scroll = 1.0
         self.scrollbar.set(start_scroll, end_scroll)
         self.file = open(self.filename, 'rb')
-
-
-        first_line = self.file.readline().decode('utf8')
-        import io
-        self.file.seek(-(len(self.longest_line)+1), io.SEEK_END)
-        last_bytes = self.file.read()
-        last_chars = last_bytes.decode('utf8').strip()
-        last_line = last_chars.split('\n')[-1]
-        first_timestamp = int(first_line.split(self.delimeter)[0])
-        last_timestamp =  int(last_line.split(self.delimeter)[0])
-        if self.num_lines != (last_timestamp - first_timestamp):
-            print(f'WARNING, num_lines ({self.num_lines}) != last_timestamp - first_timestamp ({last_timestamp}  {first_timestamp})')
-            tk.messagebox.showerror(title='timestamp error',
-                                    message=f'ERROR, num_lines ({self.num_lines}) != (last_timestamp ({last_timestamp}) - first_timestamp ({first_timestamp})) {last_timestamp-first_timestamp})   ')
-            self.root.focus_force()
-
+        if not self.binary_filename:
+            first_line = self.file.readline().decode('utf8')
+            import io
+            self.file.seek(-(len(self.longest_line)+1), io.SEEK_END)
+            last_bytes = self.file.read()
+            last_chars = last_bytes.decode('utf8').strip()
+            last_line = last_chars.split('\n')[-1]
+            first_timestamp = first_line.split(self.delimeter)[0]
+            last_timestamp =  last_line.split(self.delimeter)[0]
+            try:
+                if ':' in first_timestamp:
+                    edh_timestamp_format = '%Y-%m-%d %H:%M:%S.%f'
+                    ft = datetime.strptime(first_timestamp, edh_timestamp_format)
+                    lt = datetime.strptime(last_timestamp, edh_timestamp_format)
+                    microseconds_diff = (lt-ft).total_seconds() * 1000
+                else:
+                    first_timestamp = int(first_line.split(self.delimeter)[0])
+                    last_timestamp =  int(last_line.split(self.delimeter)[0])
+                    if self.num_lines != (last_timestamp - first_timestamp):
+                        print(f'WARNING, num_lines ({self.num_lines}) != last_timestamp - first_timestamp ({last_timestamp}  {first_timestamp})')
+                        tk.messagebox.showerror(title='timestamp error',
+                                                message=f'ERROR, num_lines ({self.num_lines}) != (last_timestamp ({last_timestamp}) - first_timestamp ({first_timestamp})) {last_timestamp-first_timestamp})   ')
+                        self.root.focus_force()
+            except ValueError:
+                pass
 
         #import pdb; pdb.set_trace()
         self.file.seek(0, 0)
@@ -185,7 +241,7 @@ class App(tk.Frame):
         self.read_npoints_lines()
         self.plot_data()
 
-    def read_npoints_lines(self):
+    def read_npoints_lines_csv(self):
         self.Y_values = []
         self.loaded_lines = []
         end_n = self.npoints-1
@@ -197,6 +253,15 @@ class App(tk.Frame):
             if i==(end_n):
                 break
         self.visible_buf_num_bytes = vis_bytes
+
+    bin_fmt = "<{}h"
+    def read_npoints_lines_bin(self):
+        self.loaded_lines = None
+        data = self.file.read(self.npoints*2)
+        fmt = self.bin_fmt.format(len(data)//2)
+        self.visible_buf_num_bytes = len(data)
+        self.Y_values = list(struct.unpack(fmt, data))
+        self.bytes_position += self.visible_buf_num_bytes
 
     def read_from_beginning(self):
         self.file.seek(0, 0)
@@ -225,6 +290,11 @@ class App(tk.Frame):
         self.on_resize()
 
     def scroll_right(self, event=None):
+        if self.binary_filename:
+            return self.scroll_right_bin(event)
+        return self.scroll_right_csv(event)
+
+    def scroll_right_csv(self, event=None):
         self.file.seek(self.bytes_position, 0)
         line= self.file.readline()
         if line in [b'', '', None]:
@@ -235,15 +305,35 @@ class App(tk.Frame):
         self.visible_buf_num_bytes += self.move_forward(line)
         self.plot_data()
 
+    def scroll_right_bin(self, event=None):
+        self.file.seek(self.bytes_position, 0)
+        data = self.file.read(2)
+        if data in [b'', '', None]:
+            return
+        self.bytes_position+=2
+        self.Y_values.pop(0)
+        right_val = struct.unpack(self.bin_fmt.format(1), data)[0]
+        #import pdb;pdb.set_trace()
+        self.Y_values.append(right_val)
+        self.plot_data()
+
     def scroll_left(self, event=None):
+        if self.binary_filename:
+            return self.scroll_left_bin(event)
+        return self.scroll_left_csv(event)
+
+    def scroll_left_csv(self, event=None):
         #import pdb; pdb.set_trace()
         leftmost_byte = self.bytes_position - self.visible_buf_num_bytes
         if leftmost_byte<=0:
             return
         chunk_before_current_visible_buf = leftmost_byte - self.longest_line_len
         if chunk_before_current_visible_buf<0:
-            chunk_before_current_visible_buf = 0
+            return self.read_from_beginning()
+        # try:
         self.Y_values.pop()
+        # except:
+        #     import pdb;pdb.set_trace()
         last_line = self.loaded_lines.pop()
         self.bytes_position -= len(last_line)
         self.visible_buf_num_bytes -= len(last_line)
@@ -253,8 +343,24 @@ class App(tk.Frame):
         new_earlier_line = next_chars.split('\n')[-1]
         self.visible_buf_num_bytes += len(new_earlier_line) + 1 # 1 for \n we stripped
         self.loaded_lines.insert(0, new_earlier_line)
-        #try:
+        self.bytes_position+=len(new_earlier_line)+1
+        # try:
         self.Y_values.insert(0, int(new_earlier_line.split(self.delimeter)[1]))
+        # except:
+        #     import pdb; pdb.set_trace()
+        self.plot_data()
+
+    def scroll_left_bin(self, event=None):
+        self.visible_buf_num_bytes = self.npoints*2
+        leftmost_byte = self.bytes_position - self.visible_buf_num_bytes - 2
+        if leftmost_byte<=0:
+            return
+        self.bytes_position -= 2
+        self.file.seek(leftmost_byte, 0)
+        left_bytes = self.file.read(self.longest_line_len)
+        left_val = struct.unpack(self.bin_fmt.format(1), left_bytes)[0]
+        self.Y_values.pop()
+        self.Y_values.insert(0, left_val)
         # except:
         #     import pdb; pdb.set_trace()
         self.plot_data()
@@ -267,6 +373,12 @@ class App(tk.Frame):
         self.scrollbar.set(offset_b, offset_b+self.scroll_window_percentage)
 
     def page_left(self, event=None):
+        if self.binary_filename:
+            return self.page_left_bin(event)
+        return self.page_left_csv(event)
+
+    def page_left_csv(self, event=None):
+        # print('page_left_csv')
         leftmost_byte = self.bytes_position - self.visible_buf_num_bytes
         if leftmost_byte<=0:
             return
@@ -287,12 +399,25 @@ class App(tk.Frame):
         self.loaded_lines = loaded_lines[-self.npoints:]
         self.visible_buf_num_bytes = sum([len(line) + 1 for line in self.loaded_lines]) # 1 for \n we stripped
         # self.bytes_position += self.visible_buf_num_bytes
-        #try:
+        # try:
         self.Y_values = [int(line.split(self.delimeter)[1]) for line in self.loaded_lines]
         # except IndexError as e:
+        #     print(e)
         #     import pdb; pdb.set_trace()
         #     pass
 
+        self.plot_data()
+        offset_a, offset_b = self.scrollbar.get()
+        self.scrollbar.set(offset_a-self.scroll_window_percentage, offset_a)
+
+    def page_left_bin(self, event=None):
+        leftmost_byte = self.bytes_position - (self.visible_buf_num_bytes*2)
+        if leftmost_byte<=0:
+            self.read_from_beginning()
+            return
+        self.bytes_position = leftmost_byte
+        self.file.seek(leftmost_byte, 0)
+        self.read_npoints_lines_bin()
         self.plot_data()
         offset_a, offset_b = self.scrollbar.get()
         self.scrollbar.set(offset_a-self.scroll_window_percentage, offset_a)
@@ -310,14 +435,18 @@ class App(tk.Frame):
                 data_start_pos, data_end_pos = (1.0-self.scroll_window_percentage, 1.0)
                 # import pdb; pdb.set_trace()
                 self.bytes_position = self.file_num_bytes
-                self.visible_buf_num_bytes = 0
+                if not self.binary_filename:
+                    self.visible_buf_num_bytes = 0
                 self.page_left()
             else:
                 data_start_pos, data_end_pos = (offset, offset+self.scroll_window_percentage)
                 start_byte = int(data_start_pos*self.file_num_bytes)
-                self.file.seek(start_byte, 0)
-                buf = self.file.read(self.longest_line_len)
-                start_byte += buf.find(b'\n') + 1
+                if not self.binary_filename:
+                    self.file.seek(start_byte, 0)
+                    buf = self.file.read(self.longest_line_len)
+                    start_byte += buf.find(b'\n') + 1
+                else:
+                    start_byte = start_byte if start_byte % 2 ==0 else start_byte-1
                 self.file.seek(start_byte, 0)
                 self.bytes_position = start_byte
                 self.read_npoints_lines()
@@ -348,15 +477,12 @@ class App(tk.Frame):
             curpos = self.scrollbar.get()
             print(f'curpos {curpos}')
             self.scrollbar.set(0.1,0.2)
-        
-
-
+    
     @property
     def npoints(self):
         return int(self.numpoints_shown.get())
     # def npoints(self):
     #     return abs(int(self.rightmost_point.get()) - int(self.leftmost_point.get()))
-    
 
     @property
     def scroll_window_percentage(self):
@@ -398,7 +524,9 @@ class App(tk.Frame):
             # max_y = (int(32768 * h_scaling) + h//2) - vert_off
             self.canvas.delete("ticks")
             num_h_ticks = w//50 # 50 pixels minimum distance between on-screen ticks
-            for n in range(0, self.npoints, self.npoints//num_h_ticks):
+            num_actual_ticks = self.npoints//num_h_ticks
+            num_actual_ticks = num_actual_ticks if num_actual_ticks>1 else 2
+            for n in range(0, self.npoints, num_actual_ticks):
                 x = int((w / self.npoints) * n)
                 self.canvas.create_line(x,0,x,5, width=2, tag='ticks')
                 self.canvas.create_text(x,0, text='%d'% (n), anchor=tk.N, tag='ticks')
@@ -461,18 +589,21 @@ class CSV_Opener(object):
 
         tk.Label(win, text="Raw CSV lines").grid(row=2, column=0, sticky='w')
         self.listbox = tk.Listbox(win)
-        self.listbox.grid(row=3, column=0)
+        self.listbox.grid(row=3, column=0,  sticky='we')
         tk.Label(win, text="Parsed CSV lines (X, Y)").grid(row=2, column=1, sticky='we', columnspan=2)
         self.parsed_listbox_x = tk.Listbox(win)
-        self.parsed_listbox_x.grid(row=3, column=1)
+        self.parsed_listbox_x.grid(row=3, column=1,  sticky='we')
         self.parsed_listbox_y = tk.Listbox(win)
-        self.parsed_listbox_y.grid(row=3, column=2)
+        self.parsed_listbox_y.grid(row=3, column=2,  sticky='we')
         
         b = tk.Button(win, text="Done", command=win.destroy)
         b.grid(row=4, column=0)
         
         self.delimeter_sv.trace_add("write", self.callback)
         self.filename = None
+        win.grid_columnconfigure(0, weight=1)
+        win.grid_columnconfigure(1, weight=1)
+        win.grid_columnconfigure(2, weight=1)
 
     def callback(self, *args):
         self.update_parsed_list()
@@ -491,7 +622,8 @@ class CSV_Opener(object):
         self.parsed_listbox_x.delete(0,tk.END)
         self.parsed_listbox_y.delete(0,tk.END)
         for i, listbox_entry in enumerate(self.listbox.get(0, tk.END)):
-            x,y = listbox_entry.split(self.delimeter_sv.get())
+            cols = listbox_entry.split(self.delimeter_sv.get())
+            x,y = cols[0:2]
             self.parsed_listbox_x.insert(tk.END, x)
             self.parsed_listbox_y.insert(tk.END, y)
 
