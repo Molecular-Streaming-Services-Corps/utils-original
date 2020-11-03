@@ -640,14 +640,18 @@ def main(args = None):
 
     args = parser.parse_args()
     values=vars(args)
-
+    # print(values)
 
     root = tk.Tk()
     app = App(root, "Demonpore CSV DataViewer!")
-    if "csv" in values:
+    if values["csv"]:
         app.filename=values["csv"]
         app.delimeter = ","
-        app.load_file();
+        app.open_csv();
+    elif values['bin']:
+        app.filename = values['bin']
+        app.binary_filename = app.filename
+        app.open_bin()
     root.mainloop()
 
 
