@@ -1,6 +1,12 @@
 # utils
 miscellaneous utility stuff
 
+# Requirements
+**Python3**
+
+pip install pandas numpy
+
+
 # Offline Data Viewer GUI (CSV and Binary files)
 
 Assumes you have the **utils** and **signals** repos cloned in adjacent directories, example:
