@@ -23,24 +23,28 @@ import os
 import re
 import sys
 import time
-import tkinter as tk
-from threading import Event
-from itertools import takewhile, repeat
+import struct
+import argparse
+from importlib import reload
 from datetime import datetime, timedelta
 
+from threading import Event
+from itertools import takewhile, repeat
+
+import tkinter as tk
 from tkinter import ttk
 from tkinter import filedialog
 from tkinter.messagebox import showinfo
-import os
-import argparse
-import struct
 
 
+import process_onscreen_data
 
 class App(tk.Frame):
     np_default = 'Num Pulses: {}'
     integral_default = 'Integral: {}'
     take_screenshots = False
+    _vertical_range = 2**16 ## default so GUI spinbox won't complain
+    line_color='limegreen'
     def __init__(self, root, title):
         tk.Frame.__init__(self, root)
         self.pack(expand=True, fill='both')
@@ -55,11 +59,10 @@ class App(tk.Frame):
         self.root.minsize(200, 200) 
 
         self.root.geometry("1024x480")
-        self.canvas = tk.Canvas(self.data_frame, background="white")
+        self.canvas = tk.Canvas(self.data_frame, background="black")
         self.canvas.bind("<Configure>", self.on_resize)
-        self.canvas.create_line((0, 0, 0, 0), tag='X', fill='darkblue', width=1)
-        self.canvas.create_line((0, 0, 0, 0), tag='Y', fill='darkred', width=1)
-        self.canvas.create_line((0, 0, 0, 0), tag='Z', fill='darkgreen', width=1)
+        self.canvas.bind("<Button-1>", self.onclick_canvas_left)
+        self.canvas.create_line((0, 0, 0, 0), tag='X', fill=self.line_color, width=1)
         self.canvas.pack(side="top", expand=True, fill='both')#, padx=10, pady=10)
         self.scrollbar = tk.Scrollbar(self.data_frame,orient='horizontal')
         self.scrollbar.pack(side="bottom", fill=tk.X)#, expand=True)
@@ -95,8 +98,8 @@ class App(tk.Frame):
         self.vertical_scaling.bind("<Return>", self.refresh_with_larger_screen_buffer)
         # self.vertical_scaling.insert(0,'512')
 
-        tk.Label(self.config_frame, text="Vertical Offset (-)").grid(row=1, column=3, sticky='w')
-        self.vertical_offset = tk.Spinbox(self.config_frame, from_=-32768, to=32768, increment=1)
+        tk.Label(self.config_frame, text="Vertical Offset").grid(row=1, column=3, sticky='w')
+        self.vertical_offset = tk.Spinbox(self.config_frame, from_=self.vertical_range_negative, to=self.vertical_range_positive, increment=1)
         self.vertical_offset.delete(0,"end")
         self.vertical_offset.insert(0,0)
         self.vertical_offset.grid(row=2, column=3,sticky="w")
@@ -121,6 +124,8 @@ class App(tk.Frame):
                                                    command=self.show_hide_labels)
         self.show_labels.checkbox.grid(row=1, column=4)
 
+        self.run_peakfinder_btn = tk.Button(self.config_frame, text="Find peaks on-screen", command=self.run_peakfinder)
+        self.run_peakfinder_btn.grid(row=1,column=5)
 
         self.config_frame.pack(side="top", fill="x")#, expand=True)
 
@@ -143,7 +148,8 @@ class App(tk.Frame):
         self.Y_values = []
         self.loaded_lines = []
         self.num_lines = None
-        self.longest_line = '18446744073709551616,-32768\n'
+        self.longest_line = '2020-11-20 19:31:16.716020,200.668015,9.0'
+                            #'18446744073709551616,-32768\n'
 
         self.binary_filename = None
         #uncomment during testing to avoid the open CSV popup
@@ -167,6 +173,7 @@ class App(tk.Frame):
     def open_bin(self):
         self.read_npoints_lines = self.read_npoints_lines_bin
         self.longest_line_len = 2
+        self._vertical_range = 2**16
         self.loaded_lines = []
         self.load_file()
 
@@ -184,6 +191,7 @@ class App(tk.Frame):
     def open_csv(self):
         self.read_npoints_lines = self.read_npoints_lines_csv
         self.longest_line_len = len(self.longest_line)
+        self._vertical_range = 250*2
         self.loaded_lines = []
         self.load_file()
 
@@ -274,7 +282,9 @@ class App(tk.Frame):
         self.bytes_position += line_len
         self.loaded_lines.append(line)
         #try:
-        self.Y_values.append(int(line.decode('utf8').split(self.delimeter)[1]))
+        splitline = line.decode('utf8').split(self.delimeter)
+        self.Y_values.append(float(splitline[1]))
+        print(f'current time: {splitline[0]}')
         # except:
         #     import pdb; pdb.set_trace()
         return line_len
@@ -345,7 +355,7 @@ class App(tk.Frame):
         self.loaded_lines.insert(0, new_earlier_line)
         self.bytes_position+=len(new_earlier_line)+1
         # try:
-        self.Y_values.insert(0, int(new_earlier_line.split(self.delimeter)[1]))
+        self.Y_values.insert(0, float(new_earlier_line.split(self.delimeter)[1]))
         # except:
         #     import pdb; pdb.set_trace()
         self.plot_data()
@@ -400,7 +410,7 @@ class App(tk.Frame):
         self.visible_buf_num_bytes = sum([len(line) + 1 for line in self.loaded_lines]) # 1 for \n we stripped
         # self.bytes_position += self.visible_buf_num_bytes
         # try:
-        self.Y_values = [int(line.split(self.delimeter)[1]) for line in self.loaded_lines]
+        self.Y_values = [float(line.split(self.delimeter)[1]) for line in self.loaded_lines]
         # except IndexError as e:
         #     print(e)
         #     import pdb; pdb.set_trace()
@@ -485,15 +495,27 @@ class App(tk.Frame):
     #     return abs(int(self.rightmost_point.get()) - int(self.leftmost_point.get()))
 
     @property
+    def vertical_range(self):
+        return self._vertical_range
+    
+    @property
+    def vertical_range_negative(self):
+        return -1*self.vertical_range_positive
+
+    @property
+    def vertical_range_positive(self):
+        return self.vertical_range//2
+
+    @property
     def scroll_window_percentage(self):
         return self.npoints/self.num_lines
     
     def get_scaling(self):
         x,y,x1,y1 = self.get_widget_bounding_box(self.canvas)
         h = abs(y1-y)
-        h_scaling = ((h) / ((2**16))) * float(self.vertical_scaling.get())
+        height_scaling = ((h) / self.vertical_range) * float(self.vertical_scaling.get())
         w = abs(x1-x)
-        return h,w,h_scaling, int(self.vertical_offset.get())
+        return h,w,height_scaling, int(self.vertical_offset.get())
 
     def plot_data(self, event=None):
         #print('GUI plot_data')
@@ -510,8 +532,8 @@ class App(tk.Frame):
         for n, value in enumerate(self.Y_values):
             x = int((w / self.npoints) * n)
             coordsX.append(x)
-            y = (int(value * h_scaling) + h//2) - vertical_offset
-            coordsX.append(y)
+            y = (int((value + vertical_offset) * h_scaling) + h//2)
+            coordsX.append(h-y) # inverts the Y axis so the origin is on the bottom-left
 
         #print('got frame')
         self.canvas.coords('X', *coordsX)
@@ -528,8 +550,8 @@ class App(tk.Frame):
             num_actual_ticks = num_actual_ticks if num_actual_ticks>1 else 2
             for n in range(0, self.npoints, num_actual_ticks):
                 x = int((w / self.npoints) * n)
-                self.canvas.create_line(x,0,x,5, width=2, tag='ticks')
-                self.canvas.create_text(x,0, text='%d'% (n), anchor=tk.N, tag='ticks')
+                self.canvas.create_line(x,0,x,5, width=2, tag='ticks', fill=self.line_color)
+                self.canvas.create_text(x,0, text='%d'% (n), anchor=tk.N, tag='ticks', fill=self.line_color)
             # for n, value in enumerate(self.Y_values):
             #     if n%50==0:
             #         x = int((w / self.npoints) * n)
@@ -543,14 +565,15 @@ class App(tk.Frame):
             num_ticks = h//50
             print(f'num_ticks {num_ticks}')
             #for y in range(0, h, h//10):
-            for y in range(-32768, 32768, (2**16)//16):
+            for y in range(self.vertical_range_negative, self.vertical_range_positive, self.vertical_range//16):
                 #scaled_y = ((y+32768)*h_scaling)+vert_off
-                scaled_y = (int(y * h_scaling) + h//2) - vert_off
+                scaled_y = (int((y + vert_off) * h_scaling) + h//2)
+                scaled_y = h - scaled_y  # inverts the Y axis so the origin is on the bottom-left
                 #print(h, y, scaled_y, h_scaling)
                 # y = (int(pix * h_scaling) + h//2) - vert_off
                 # self.canvas.create_line(0, y, 5, y, width=2, tag='ticks')
                 #self.canvas.create_text(0, y, text=' %d'% (((y/h_scaling)-32768)+vert_off), anchor=tk.W, tag='ticks')
-                self.canvas.create_text(0, scaled_y, text=' %d'% y, anchor=tk.W, tag='ticks')
+                self.canvas.create_text(0, scaled_y, text=' %d'% y, anchor=tk.W, tag='ticks', fill=self.line_color)
         self.plot_data()
     
     # def screenshot(self):
@@ -570,6 +593,17 @@ class App(tk.Frame):
         box=(x,y,x1,y1)
         return box
 
+
+    def onclick_canvas_left(self, event=None, point=False):
+        if event:
+            print("clicked at", event.x, event.y)
+            h, w, h_scaling, vertical_offset = self.get_scaling()
+            x = int((w / self.npoints) * event.x)
+            print(f'height: {h}, width: {w}, x: {x}, h_scaling: {h_scaling}, vertical_offset: {vertical_offset}')
+
+    def run_peakfinder(self):
+        reload(process_onscreen_data)
+        process_onscreen_data.run(self)
 
 class CSV_Opener(object):
     def __init__(self, parent):
@@ -643,7 +677,7 @@ def main(args = None):
     # print(values)
 
     root = tk.Tk()
-    app = App(root, "Demonpore CSV DataViewer!")
+    app = App(root, "Demonpore CSV and Binary DataViewer")
     if values["csv"]:
         app.filename=values["csv"]
         app.delimeter = ","
