@@ -19,8 +19,8 @@ def run(self):
     # print(f'std_dev {sd} and RMS: {rms}')
     print(f'\nbyte num at right of screen: {self.bytes_position}')
     spikes, sd, rms = stats.get_spikes(self.Y_values,
-                                           exceptional_peak_sd=3.5,
-                                           peak_side_sd=0.75)
+                                           exceptional_peak_sd=5.0,
+                                           peak_side_sd=1.5)
     self.canvas.delete("clicks")
     self.canvas.delete("spikes")
     h, w, h_scaling, vertical_offset = self.get_scaling()
@@ -40,9 +40,12 @@ def run(self):
     _max = max(self.Y_values)
     _min = min(self.Y_values)
     avg = sum(self.Y_values)/len(self.Y_values)
-    print(f'mix Y vals {_min} max  {_max} max-min  {_max-_min}\n'
-          f'max-rms {abs(_max-rms)}\n'
-          f'min-rms {abs(_min-rms)}\n'
-          f'(max-rms)/std_dev = {(_max-rms)/sd}\n'
-          f'(min-rms)/std_dev = {(_min-rms)/sd}\n'
+    print(f'rms {rms} sd {sd}\n'
+          f'mix Y vals {_min} max  {_max} max-min  {_max-_min}\n'
+          f'max-rms {abs(_max)-abs(rms)}\n'
+          f'min-rms {abs(_min)-abs(rms)}\n'
+          f'(max-rms)/std_dev = {(abs(_max)-abs(rms))/sd}\n'
+          f'(min-rms)/std_dev = {(abs(_min)-abs(rms))/sd}\n'
           f'avg {avg} #points {len(self.Y_values)}')
+    # 16.716000
+    # 17.566795
