@@ -33,12 +33,14 @@ from datetime import datetime
 from threading import Thread, Event, Lock
 
 
-valid_commands = ['set_pos', 
-                  'set_bias', 
-                  'start', 
-                  'stop',
-                  'error',
-                  'test']
+valid_commands = {'set_pos': 1, 
+                  'set_bias': 2, 
+                  'start': 3, 
+                  'stop': 6,
+                  'error': ord('e'),
+                  'test': 9,
+                  'type_info': 9,
+                  'send_TYPE_PORE_SAMPLES': 10}
 
 sync = 0x16 # ASCI SYNC
 
@@ -51,33 +53,49 @@ _sample_num = 8
 
 def create_packet(msg_type, msg, samples_per_second=3E3, use_raw_protocol=False):
     if msg_type not in valid_commands:
-        return -1
+        raise Exception(f'{msg_type} is not a valid command')
     msg_len = 0
     type_code = 0
     msg_data = []
+    type_code = valid_commands[msg_type]
     if msg_type == 'set_pos':
-        type_code=1
         msg_data = struct.pack("d", msg)
     elif msg_type == 'set_bias':
-        type_code=2
         msg_data = struct.pack("d", msg)
     elif msg_type == 'start':
-        type_code=3
         bias = 0
         number_of_pores = 1
         samples_per_second = float(samples_per_second)
         # msg_data = [struct.pack("I", bias), struct.pack("I", number_of_pores), struct.pack("f", samples_per_second)]
-        msg_data = [struct.pack("I", number_of_pores), struct.pack(">f", samples_per_second),
+        msg_data = [struct.pack(">I", number_of_pores), struct.pack(">f", samples_per_second),
                     b'' if not use_raw_protocol else b'1']
         print(f'start SAMPLE Hz {samples_per_second} data is : {msg_data}')
     elif msg_type == 'stop':
-        type_code=6
+        pass
     elif msg_type == 'error':
         type_code = ord('e')
         msg_data = struct.pack("B", 0)
     elif msg_type == 'test':
-        type_code = 9
         msg_data = bytes.fromhex('F00DF00D') #DEADBEEF
+    elif msg_type == 'type_info':
+        type_code = 9 #oops, clashes with above
+        uint16_subid = struct.pack(">H", msg)
+        if msg == 0:
+            # mac_to_spoof = '04:e9:e5:0b:f1:80'
+            # s = mac_to_spoof.encode('ascii')
+            info = bytes([0x04, 0xe9, 0xe5, 0x0b, 0xf1, 0x80])
+            #print(f'mac {info}')
+        elif msg == 1:
+            info = 'masquerador'.encode('ascii')
+        elif msg ==2:
+            info = 'fake_file.bin'.encode('ascii')
+        msg_data = [uint16_subid, info]
+        print(msg_data)
+    elif msg_type == 'send_TYPE_PORE_SAMPLES':
+        i,data = msg
+        uint64_numbytes = struct.pack("<q", i)
+        print(f'uint64_numbytes {uint64_numbytes}')
+        msg_data = [uint64_numbytes, data]
 
     if not isinstance(msg_data, list):
         msg_len = len(msg_data)
@@ -129,7 +147,7 @@ def parse_raw_tcp_data(buffer):
             data = b''
             TYPE = buffer[3:4]
             data = buffer[3:3+LENGTH]
-            #print(f'buflen {len(buffer)} TYPE {TYPE} LENGTH {LENGTH}')
+            #print(f'buflen {len(buffer)} TYPE {TYPE} LENGTH {LENGTH} data {data}')
             last_info = {'bytes': buffer[0:3+LENGTH], 'len':LENGTH, 'type':TYPE, 'data':data}
             del buffer[0:3+LENGTH]
     # if data is None:
@@ -180,7 +198,7 @@ def threaded_stream(HOST, PORT,
     q = queue.SimpleQueue()
     q_lock = Lock()
     start_stop_event = Event()
-    t = Thread(target=_threaded_stream,
+    t = Thread(target=_threaded_pore_data_receive_stream,
                args=(q, q_lock, start_stop_event,
                      HOST, PORT,
                      #screen_display_buffer_len,
@@ -225,7 +243,7 @@ def ship_data(sample_num, value, save_file, q, q_lock):
     #     pass
     #     #print('not time to display')
 
-def _threaded_stream(q, q_lock, stop_streaming_event,
+def _threaded_pore_data_receive_stream(q, q_lock, stop_streaming_event,
                      HOST, PORT,
                      #screen_display_buf_len,
                      sample_rate_hz,
@@ -271,6 +289,7 @@ def _threaded_stream(q, q_lock, stop_streaming_event,
     good_data = 0
     if save_filename:
         save_file = open(save_filename, 'w')
+
     while not stop_streaming_event.is_set():
         #print('threaded is set {}'.format(stop_streaming_event.is_set()))
         #now = datetime.now()
@@ -316,6 +335,7 @@ def _threaded_stream(q, q_lock, stop_streaming_event,
             if data:
                 good_data +=1
                 type_code = data[0]
+
                 if type_code == 5:
                     try:
                         sample_num = struct.unpack('>Q', data[1:9])[0]
@@ -326,7 +346,16 @@ def _threaded_stream(q, q_lock, stop_streaming_event,
                     # print('type_code 5, datalen {}, len data is {}, #{}, val: {}'
                     #       .format(len(rcv), len(data), sample_num, value))
                     ship_data(sample_num, value, save_file, q, q_lock) #screen_display_buf_len
+                elif type_code == 4: #TYPE_DATA_HEADER
+                    data = data[1:]
+                    delta_t = struct.unpack('>f', data[:4]); #float
+                    npore = struct.unpack('>I', data[4:8]); #uint32
+                    scale = struct.unpack('>f', data[8:12]); #float
+                    print('sample data header: {}'.format(data))
+                    print('delta T ({} seconds) number of active pores ({}) Amp/LSB ({})'
+                          .format(delta_t, npore, scale))
                 elif type_code == 10:
+                    # raw pore samples
                     sample_number = struct.unpack('<Q', data[1:9])[0]
 
                     if (last_sample_offset != sample_number+1):
@@ -354,6 +383,16 @@ def _threaded_stream(q, q_lock, stop_streaming_event,
                         print(e)
                     print(offset, len(data))
                     unpack = False
+                elif type_code == 9:
+                    sub_id = struct.unpack('>h', data[1:3])[0]
+                    data = data[3:]
+                    if sub_id==0:
+                        #mac = struct.unpack('<6B',data[1:])
+                        print('MAC is:' + ':'.join(['%02x'% b for b in data]))
+                    elif sub_id==1:
+                        print('Version is: {}'.format(data[1:]))
+                    else:
+                        print('TYPE_INFO sub_id {}, data {}'.format(sub_id, data))
                 else:
                     print(f'tc wasnt 5, it was {type_code}')
             else:
@@ -389,32 +428,44 @@ def _threaded_stream(q, q_lock, stop_streaming_event,
             # except Exception as eee:
             #     print(eee)
             #     unpack=False
-
+    # send stop packet
+    packet = create_packet('stop', sub_command, sample_rate_hz, use_raw_protocol)
+    print('sending STOP packet {}'.format(packet))
+    s.sendall(packet)
+    s.setblocking(0)
+    # wait for stop response
+    while True:
+        data = parse_raw_tcp_data(rcv)
+        if data:
+            # print('got data after stop requested')
+            type_code = data[0]
+            if type_code == 6: #TYPE_STOP
+                print('Received STOP confirmation')
+                break
+            # else:
+            #     print('looking for STOP but found {}'.format(type_code))
+        chunk=b""
+        try:
+            chunk = s.recv(64)
+        except:
+            pass
+        rcv.extend(chunk)
+        # print(rcv)
+    print('closing socket')
+    # b = b''
+#     while len(b)<download_buf_size:
+#         bytes_remaining_to_download = download_buf_size-len(b)
+#         #print(bytes_remaining_to_download)
+#         b += s.recv(bytes_remaining_to_download)
     print('s.close')
     if not use_fake_data:
         s.close()
     if save_file:
         save_file.close()
 
-def cmd_line(HOST, PORT, sample_rate_hz, save_filename):
-    command = ''
-    while command!='quit':
-        command = input('what command do you want to run, options are:'
-                        '\n\t{}'.format(valid_commands))
-        # command = 'start'
-        sub_command = ''
-        if command == 'set_pos':
-            sub_command = input('provide position (radians)')
-        print('constructing packet to send')
-        packet = create_packet(command, sub_command)
-        if command !='start':
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # UDP uses SOCK_DGRAM
-            # s.settimeout(1) #only wait 1 second for a resonse
-            s.connect((HOST, PORT))
-            print('connected to host')
-            s.sendall(packet)
-            print('sending packet {}'.format(packet))
-            print('waiting on data')
+def wait_for_sync(s):
+    while True:
+        try:
             SYNC = s.recv(1)
             if SYNC and SYNC[0] == sync:
                 print('got good sync')
@@ -434,29 +485,123 @@ def cmd_line(HOST, PORT, sample_rate_hz, save_filename):
                 if (LENGTH-1):
                     data = s.recv(LENGTH - 1)
                     print(f'Received data: {data}')
-                process_return_data(TYPE, data)
-        else:
-            q, start_stop_event = threaded_stream(HOST, PORT,
-                                                  screen_display_buffer_len=100,
-                                                  sample_rate_hz=sample_rate_hz,
-                                                  # screen_refresh_rate=0,
-                                                  save_filename=save_filename,
-                                                  use_fake_data=False)
-            while not start_stop_event.is_set():
-                if not q.empty():
-                    data = q.get()
-                    print(data)
-    s.close()
+                return (TYPE, data)
+        except:
+            pass
+
+def masquerade(server='lilith.demonpore.tv', port=31416, filepath_to_stream='1b_blood.bin'):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # UDP uses SOCK_DGRAM
+    try:
+        print(f'attempting to connect to ({server}:{port})')
+        s.connect((server, port))
+    except OSError as e:
+        print(e)
+        print('Try Again')
+        return
+    print(f'connected to {server}')
+    
+    packet = create_packet('type_info', 0)
+
+    print('sending info MAC packet {}'.format(packet))
+    s.sendall(packet)
+    packet = create_packet('type_info', 1)
+    print('sending info VERSIOn packet {}'.format(packet))
+    s.sendall(packet)
+
+    while True: #s.connected doesn't exist... hrmm, probably need to catch some error on STOP?
+        cmd_type, data = wait_for_sync(s)
+        int_cmd = int.from_bytes(cmd_type, 'big')
+        print(f'cmd is: {int_cmd}')
+        if int_cmd == valid_commands['start']:
+
+            # uint32_t npore = sys_get_be32(packet_data);
+            # float Fsample = bytes_to_float((uint8_t*)(&packet_data[0] + 4));
+            # create_start_response_packet(1./Fsample, 1, Sscale); // use npore instead of 1 someday
+            packet = create_packet('type_info', 2)
+            s.sendall(packet)
+            i = 0
+
+            file_to_stream = open(filepath_to_stream, 'rb')
+            buf_size =  4096*4 # 2*16 #
+            data = file_to_stream.read(buf_size)
+            while data:
+                i += len(data)//2
+                packet = create_packet('send_TYPE_PORE_SAMPLES', [i, data])
+                #print(packet)
+                s.sendall(packet)
+                data = file_to_stream.read(buf_size)
 
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("HOST")
     parser.add_argument("PORT", type=int)
-    parser.add_argument("sample_rate_hz", type=float)
+    parser.add_argument("-sample_rate_hz", type=float)
     parser.add_argument('-o', '--outfile', nargs='?',
                         type=str,
                         help='output file, in CSV format')
+    parser.add_argument('-m', '--masquerade', nargs='?',
+                        type=str,
+                        help='filepath to BIN for masquerading as a teensy to the webserver')
     args = parser.parse_args()
     # print(args)
-    cmd_line(args.HOST, args.PORT, args.sample_rate_hz, args.outfile)
+    HOST=args.HOST
+    PORT=args.PORT
+    sample_rate_hz=args.sample_rate_hz
+    save_filename = args.outfile
+
+    if args.masquerade:
+        # Masquerade mode for local development webserver:
+        # python3 teensy_gui/command_line_user_interface.py 192.168.1.14 31416 -m 1b_fromfloat.bin
+        masquerade(args.HOST, args.PORT, filepath_to_stream=args.masquerade)
+    else:
+        command = ''
+        while command!='quit':
+            command = input('what command do you want to run, options are:'
+                            '\n\t{}'.format(valid_commands))
+            # command = 'start'
+            sub_command = ''
+            if command == 'set_pos':
+                sub_command = input('provide position (radians)')
+            print('constructing packet to send')
+            packet = create_packet(command, sub_command)
+            if command !='start':
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # UDP uses SOCK_DGRAM
+                # s.settimeout(1) #only wait 1 second for a resonse
+                s.connect((HOST, PORT))
+                print('connected to host')
+                s.sendall(packet)
+                print('sending packet {}'.format(packet))
+                print('waiting on data')
+                SYNC = s.recv(1)
+                if SYNC and SYNC[0] == sync:
+                    print('got good sync')
+                    LENGTH_UPPER = s.recv(1)
+                    LENGTH_LOWER = s.recv(1)
+                    TYPE = s.recv(1)
+                    print(SYNC)
+                    print(TYPE)
+                    print(LENGTH_UPPER)
+                    print(LENGTH_LOWER)
+                    LENGTH_UPPER = int.from_bytes(LENGTH_UPPER, byteorder='little')
+                    LENGTH_LOWER = int.from_bytes(LENGTH_LOWER, byteorder='little')
+                    print(f'LENGTH_UPPER {LENGTH_UPPER} LENGTH_LOWER {LENGTH_LOWER}')
+                    LENGTH = (LENGTH_UPPER<<8) | LENGTH_LOWER
+                    print(f'Received Type {TYPE} and LENGTH {LENGTH}')
+                    data = b''
+                    if (LENGTH-1):
+                        data = s.recv(LENGTH - 1)
+                        print(f'Received data: {data}')
+                    process_return_data(TYPE, data)
+            else:
+                q, start_stop_event = threaded_stream(HOST, PORT,
+                                                      screen_display_buffer_len=100,
+                                                      sample_rate_hz=sample_rate_hz,
+                                                      # screen_refresh_rate=0,
+                                                      save_filename=save_filename,
+                                                      use_fake_data=False)
+                while not start_stop_event.is_set():
+                    if not q.empty():
+                        data = q.get()
+                        print(data)
+        s.close()
