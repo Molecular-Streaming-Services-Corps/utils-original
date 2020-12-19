@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
 """
+Connect to Teensy:
+python3 teensy_gui/command_line_user_interface.py demonpore.local 31416 -sample_rate_hz 200000
+
+Masquerade Mode (Connect to webserver pretending to be teensy):
+python3 teensy_gui/command_line_user_interface.py 192.168.1.14 31416 -m 1b_fromfloat.bin -sample_rate_hz 200000 --masquerade_mac 04:e9:e5:0b:f1:80 --masquerade_file_start_offset 600
+"""
+
+"""
 < little-endian  
 > big-endian
 
@@ -26,9 +34,11 @@ P void * integer (5), (3)
 
 import time
 import queue
+import codecs
 import socket
 import struct
 import argparse
+import micro_timing
 from datetime import datetime
 from threading import Thread, Event, Lock
 
@@ -51,7 +61,8 @@ _type_code = 1
 _sample_num = 8
 
 
-def create_packet(msg_type, msg, samples_per_second=3E3, use_raw_protocol=False):
+def create_packet(msg_type, msg, samples_per_second=3E3, use_raw_protocol=False,
+                  mac_to_spoof=None):
     if msg_type not in valid_commands:
         raise Exception(f'{msg_type} is not a valid command')
     msg_len = 0
@@ -81,9 +92,13 @@ def create_packet(msg_type, msg, samples_per_second=3E3, use_raw_protocol=False)
         type_code = 9 #oops, clashes with above
         uint16_subid = struct.pack(">H", msg)
         if msg == 0:
-            # mac_to_spoof = '04:e9:e5:0b:f1:80'
+            #mac_to_spoof = '04:e9:e5:0b:f1:80'
+            print(f'spoofing MAC: {mac_to_spoof}')
+            if ':' in mac_to_spoof:
+                mac_to_spoof = ''.join(mac_to_spoof.split(':'))
+            info = codecs.decode(mac_to_spoof, "hex")
             # s = mac_to_spoof.encode('ascii')
-            info = bytes([0x04, 0xe9, 0xe5, 0x0b, 0xf1, 0x80])
+            #info = bytes([0x04, 0xe9, 0xe5, 0x0b, 0xf1, 0x80])
             #print(f'mac {info}')
         elif msg == 1:
             info = 'masquerador'.encode('ascii')
@@ -94,7 +109,7 @@ def create_packet(msg_type, msg, samples_per_second=3E3, use_raw_protocol=False)
     elif msg_type == 'send_TYPE_PORE_SAMPLES':
         i,data = msg
         uint64_numbytes = struct.pack("<q", i)
-        print(f'uint64_numbytes {uint64_numbytes}')
+        #print(f'uint64_numbytes {uint64_numbytes}')
         msg_data = [uint64_numbytes, data]
 
     if not isinstance(msg_data, list):
@@ -105,7 +120,7 @@ def create_packet(msg_type, msg, samples_per_second=3E3, use_raw_protocol=False)
 
     msg_len += 1 # for the type-code, I think
     
-    print('msg len is {}'.format(msg_len))
+    #print('msg len is {}'.format(msg_len))
 
     body = b''.join([struct.pack("B", sync),
                      struct.pack(">H", msg_len),
@@ -464,6 +479,7 @@ def _threaded_pore_data_receive_stream(q, q_lock, stop_streaming_event,
         save_file.close()
 
 def wait_for_sync(s):
+    s.setblocking(False)
     while True:
         try:
             SYNC = s.recv(1)
@@ -487,9 +503,12 @@ def wait_for_sync(s):
                     print(f'Received data: {data}')
                 return (TYPE, data)
         except:
-            pass
+            # so we CTRL-C will break out,
+            # if we didn't want to handle CTRL-C then replace with "pass"
+            time.sleep(1)
+    s.setblocking(True)
 
-def masquerade(server='lilith.demonpore.tv', port=31416, filepath_to_stream='1b_blood.bin'):
+def masquerade(server, port, filepath_to_stream, mac, freq, offset=None):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # UDP uses SOCK_DGRAM
     try:
         print(f'attempting to connect to ({server}:{port})')
@@ -500,40 +519,73 @@ def masquerade(server='lilith.demonpore.tv', port=31416, filepath_to_stream='1b_
         return
     print(f'connected to {server}')
     
-    packet = create_packet('type_info', 0)
+    packet = create_packet('type_info', 0, mac_to_spoof=mac)
 
     print('sending info MAC packet {}'.format(packet))
     s.sendall(packet)
     packet = create_packet('type_info', 1)
-    print('sending info VERSIOn packet {}'.format(packet))
+    print('sending info VERSION packet {}'.format(packet))
     s.sendall(packet)
-
+    streaming_thread = None
+    stop_streaming_data_event = None
     while True: #s.connected doesn't exist... hrmm, probably need to catch some error on STOP?
         cmd_type, data = wait_for_sync(s)
         int_cmd = int.from_bytes(cmd_type, 'big')
         print(f'cmd is: {int_cmd}')
-        if int_cmd == valid_commands['start']:
+        if int_cmd == valid_commands['start'] and not streaming_thread:
 
             # uint32_t npore = sys_get_be32(packet_data);
             # float Fsample = bytes_to_float((uint8_t*)(&packet_data[0] + 4));
             # create_start_response_packet(1./Fsample, 1, Sscale); // use npore instead of 1 someday
             packet = create_packet('type_info', 2)
             s.sendall(packet)
-            i = 0
 
-            file_to_stream = open(filepath_to_stream, 'rb')
-            buf_size =  4096*4 # 2*16 #
-            data = file_to_stream.read(buf_size)
-            while data:
-                i += len(data)//2
-                packet = create_packet('send_TYPE_PORE_SAMPLES', [i, data])
-                #print(packet)
-                s.sendall(packet)
-                data = file_to_stream.read(buf_size)
+            def stream_file(filepath_to_stream, stop_streaming_data_event, freq, offset):
+                buf_size =  4096*4 # 2*16 #
+                freq_hz_print_delay = buf_size*20
+                wait_time = (1.0/freq)*buf_size
+                wait_time_micros = wait_time*1E6
+                tenth_wait_time = wait_time_micros/10.0
+                if offset:
+                    offset = int(offset*freq*2)
+                    if offset%2:
+                        offset-=1
+                else:
+                    offset = 0
+                file_to_stream = open(filepath_to_stream, 'rb')
+                i = 0
+                while not stop_streaming_data_event.is_set():
+                    print(f'seeking to {offset} in file')
+                    file_to_stream.seek(offset)
+                    data = file_to_stream.read(buf_size)
+                    while data and (not stop_streaming_data_event.is_set()):
+                        start_t = micro_timing.micros()
+                        i += len(data)//2
+                        packet = create_packet('send_TYPE_PORE_SAMPLES', [i, data])
+                        #print(packet)
+                        s.sendall(packet)
+                        data = file_to_stream.read(buf_size)
+                        while (micro_timing.micros() - start_t < wait_time_micros):
+                            pass #do nothing
+                        if i%freq_hz_print_delay==0:
+                            print(f'freq Hz of data stream is: {1E6/(micro_timing.micros() - start_t)*buf_size}')
+
+
+            stop_streaming_data_event = Event()
+            streaming_thread = Thread(target=stream_file, daemon=True,
+                       args=(filepath_to_stream, stop_streaming_data_event, freq, offset))
+            streaming_thread.start()
+
+        if int_cmd == valid_commands['stop'] and streaming_thread:
+            stop_streaming_data_event.set()
+            streaming_thread = None
+            # stop response
+            s.sendall(create_packet('stop', None))
 
 
 if __name__=='__main__':
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=("Masquerade mode (stream a binary data file to a webserver as if this was a teensy).\n"
+                                                  "python3 command_line_user_interface.py lilith.demonpore.tv 31416 -m 1b_fromfloat.bin -sample_rate_hz 200000 --masquerade_mac 04:e9:e5:0b:f1:80 --masquerade_file_start_offset 600"))
     parser.add_argument("HOST")
     parser.add_argument("PORT", type=int)
     parser.add_argument("-sample_rate_hz", type=float)
@@ -543,6 +595,12 @@ if __name__=='__main__':
     parser.add_argument('-m', '--masquerade', nargs='?',
                         type=str,
                         help='filepath to BIN for masquerading as a teensy to the webserver')
+    parser.add_argument('--masquerade_mac', nargs='?',
+                        type=str,
+                        help='MAC in form AA:BB:CC:00:11:22 or AABBCC001122')
+    parser.add_argument('--masquerade_file_start_offset',
+                        type=int,
+                        help='file offset in seconds')
     args = parser.parse_args()
     # print(args)
     HOST=args.HOST
@@ -550,10 +608,15 @@ if __name__=='__main__':
     sample_rate_hz=args.sample_rate_hz
     save_filename = args.outfile
 
+    if args.masquerade and (args.masquerade_mac is None or sample_rate_hz is None): # or args.rport is None):
+        parser.error("--masquerade requires --masquerade_mac AND --sample_rate_hz")
     if args.masquerade:
         # Masquerade mode for local development webserver:
-        # python3 teensy_gui/command_line_user_interface.py 192.168.1.14 31416 -m 1b_fromfloat.bin
-        masquerade(args.HOST, args.PORT, filepath_to_stream=args.masquerade)
+        # python3 teensy_gui/command_line_user_interface.py 192.168.1.14 31416 -m 1b_fromfloat.bin -sample_rate_hz 200000 --masquerade_mac 04:e9:e5:0b:f1:80 --masquerade_file_start_offset 600
+        masquerade(args.HOST, args.PORT,
+            filepath_to_stream=args.masquerade, mac=args.masquerade_mac,
+            freq=sample_rate_hz,
+            offset=args.masquerade_file_start_offset)
     else:
         command = ''
         while command!='quit':
