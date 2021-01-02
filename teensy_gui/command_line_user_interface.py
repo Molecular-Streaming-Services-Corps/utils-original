@@ -38,7 +38,7 @@ import codecs
 import socket
 import struct
 import argparse
-import micro_timing
+from . import micro_timing
 from datetime import datetime
 from threading import Thread, Event, Lock
 
@@ -447,7 +447,7 @@ def _threaded_pore_data_receive_stream(q, q_lock, stop_streaming_event,
     packet = create_packet('stop', sub_command, sample_rate_hz, use_raw_protocol)
     print('sending STOP packet {}'.format(packet))
     s.sendall(packet)
-    s.setblocking(0)
+    # s.setblocking(0)
     # wait for stop response
     while True:
         data = parse_raw_tcp_data(rcv)
@@ -479,7 +479,7 @@ def _threaded_pore_data_receive_stream(q, q_lock, stop_streaming_event,
         save_file.close()
 
 def wait_for_sync(s):
-    s.setblocking(False)
+    # s.setblocking(False)
     while True:
         try:
             SYNC = s.recv(1)
@@ -506,7 +506,18 @@ def wait_for_sync(s):
             # so we CTRL-C will break out,
             # if we didn't want to handle CTRL-C then replace with "pass"
             time.sleep(1)
-    s.setblocking(True)
+    # s.setblocking(True)
+
+
+def get_binary_file_offset_from_seconds(offset, freq):
+    if offset:
+        offset = int(offset*freq*2)
+        if offset%2:
+            offset-=1
+    else:
+        offset = 0
+    return offset
+
 
 def masquerade(server, port, filepath_to_stream, mac, freq, offset=None):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # UDP uses SOCK_DGRAM
@@ -546,29 +557,24 @@ def masquerade(server, port, filepath_to_stream, mac, freq, offset=None):
                 wait_time = (1.0/freq)*buf_size
                 wait_time_micros = wait_time*1E6
                 tenth_wait_time = wait_time_micros/10.0
-                if offset:
-                    offset = int(offset*freq*2)
-                    if offset%2:
-                        offset-=1
-                else:
-                    offset = 0
-                file_to_stream = open(filepath_to_stream, 'rb')
-                i = 0
-                while not stop_streaming_data_event.is_set():
-                    print(f'seeking to {offset} in file')
-                    file_to_stream.seek(offset)
-                    data = file_to_stream.read(buf_size)
-                    while data and (not stop_streaming_data_event.is_set()):
-                        start_t = micro_timing.micros()
-                        i += len(data)//2
-                        packet = create_packet('send_TYPE_PORE_SAMPLES', [i, data])
-                        #print(packet)
-                        s.sendall(packet)
+                offset = get_binary_file_offset_from_seconds(offset, freq)
+                with open(filepath_to_stream, 'rb') as file_to_stream:
+                    i = 0
+                    while not stop_streaming_data_event.is_set():
+                        print(f'seeking to {offset} in file')
+                        file_to_stream.seek(offset)
                         data = file_to_stream.read(buf_size)
-                        while (micro_timing.micros() - start_t < wait_time_micros):
-                            pass #do nothing
-                        if i%freq_hz_print_delay==0:
-                            print(f'freq Hz of data stream is: {1E6/(micro_timing.micros() - start_t)*buf_size}')
+                        while data and (not stop_streaming_data_event.is_set()):
+                            start_t = micro_timing.micros()
+                            i += len(data)//2
+                            packet = create_packet('send_TYPE_PORE_SAMPLES', [i, data])
+                            #print(packet)
+                            s.sendall(packet)
+                            data = file_to_stream.read(buf_size)
+                            while (micro_timing.micros() - start_t < wait_time_micros):
+                                pass #do nothing
+                            if i%freq_hz_print_delay==0:
+                                print(f'freq Hz of data stream is: {1E6/(micro_timing.micros() - start_t)*buf_size}')
 
 
             stop_streaming_data_event = Event()
