@@ -38,7 +38,10 @@ import codecs
 import socket
 import struct
 import argparse
-from . import micro_timing
+try:
+    import micro_timing
+except ModuleNotFoundError:
+    from . import micro_timing
 from datetime import datetime
 from threading import Thread, Event, Lock
 
@@ -519,7 +522,7 @@ def get_binary_file_offset_from_seconds(offset, freq):
     return offset
 
 
-def masquerade(server, port, filepath_to_stream, mac, freq, offset=None):
+def masquerade(server, port, filepath_to_stream, mac, freq, offset=None, oneshot=False):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # UDP uses SOCK_DGRAM
     try:
         print(f'attempting to connect to ({server}:{port})')
@@ -575,7 +578,8 @@ def masquerade(server, port, filepath_to_stream, mac, freq, offset=None):
                                 pass #do nothing
                             if i%freq_hz_print_delay==0:
                                 print(f'freq Hz of data stream is: {1E6/(micro_timing.micros() - start_t)*buf_size}')
-
+                        if oneshot:
+                            stop_streaming_data_event.set()
 
             stop_streaming_data_event = Event()
             streaming_thread = Thread(target=stream_file, daemon=True,
@@ -607,6 +611,8 @@ if __name__=='__main__':
     parser.add_argument('--masquerade_file_start_offset',
                         type=int,
                         help='file offset in seconds')
+    parser.add_argument('-masquerade_oneshot', action='store_true', default=False,
+                        help='just send this file once, then disconnect')
     args = parser.parse_args()
     # print(args)
     HOST=args.HOST
@@ -622,7 +628,8 @@ if __name__=='__main__':
         masquerade(args.HOST, args.PORT,
             filepath_to_stream=args.masquerade, mac=args.masquerade_mac,
             freq=sample_rate_hz,
-            offset=args.masquerade_file_start_offset)
+            offset=args.masquerade_file_start_offset,
+            oneshot=args.masquerade_oneshot)
     else:
         command = ''
         while command!='quit':
